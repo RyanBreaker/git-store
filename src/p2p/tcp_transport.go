@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 )
 
 // TCPPeer represents the remote node over a TCP-established connection.
@@ -24,24 +23,34 @@ func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 	}
 }
 
+func (p *TCPPeer) Close() error {
+	return p.conn.Close()
+}
+
 type TCPTransportOpts struct {
 	ListenAddr    string
 	HandshakeFunc HandshakeFunc
 	Decoder       Decoder
+	OnPeer        func(Peer) error
 }
 
 type TCPTransport struct {
 	TCPTransportOpts
 	listener net.Listener
-
-	peerLock sync.RWMutex
-	peers    map[net.Addr]Peer
+	rpcCh    chan RPC
 }
 
 func NewTCPTransport(opts TCPTransportOpts) *TCPTransport {
 	return &TCPTransport{
 		TCPTransportOpts: opts,
+		rpcCh:            make(chan RPC),
 	}
+}
+
+// Consume implements the Transport interface, returning a read-only channel for reading the incoming
+// messages received from another peer on the network.
+func (t *TCPTransport) Consume() <-chan RPC {
+	return t.rpcCh
 }
 
 func (t *TCPTransport) ListenAndAccept() error {
@@ -74,28 +83,38 @@ func (t *TCPTransport) acceptLoop() error {
 type Temp struct{}
 
 func (t *TCPTransport) handleConn(conn net.Conn) {
-	peer := NewTCPPeer(conn, true)
+	var err error
+
+	defer func() {
+		fmt.Printf("Dropping peer connection: %+v\n", conn)
+		conn.Close()
+	}()
+
+	peer := NewTCPPeer(conn, false)
 
 	if err := t.HandshakeFunc(peer); err != nil {
-		conn.Close()
-		fmt.Printf("TCP handshake error: %s\n", err)
 		return
 	}
 
+	if t.OnPeer != nil {
+		if err = t.OnPeer(peer); err != nil {
+			return
+		}
+	}
+
 	// Read loop
-	msg := &RPC{}
+	rpc := RPC{}
 	for {
-		if err := t.Decoder.Decode(conn, msg); err != nil {
+		if err = t.Decoder.Decode(conn, &rpc); err != nil {
 			if err == io.EOF {
-				fmt.Printf("TCP connection closed by peer %+v\n", peer)
+				fmt.Printf("TCP connection closed by peer: %+v\n", peer)
 				break
 			}
 			fmt.Printf("TCP Error: %s\n", err)
 			continue
 		}
 
-		msg.From = conn.RemoteAddr()
-
-		fmt.Printf("RPC: %+v\n", msg)
+		rpc.From = conn.RemoteAddr()
+		t.rpcCh <- rpc
 	}
 }
