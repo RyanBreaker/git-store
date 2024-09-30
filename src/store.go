@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path"
+	"strings"
 )
 
 type PathTransformFunc func(string) PathKey
@@ -23,7 +24,7 @@ var CASPathTransformFunc = func(key string) PathKey {
 	hash := sha1.Sum([]byte(key))
 	hashString := hex.EncodeToString(hash[:])
 
-	blockSize := 5
+	const blockSize = 5
 	sliceLen := len(hashString) / blockSize
 	paths := make([]string, sliceLen)
 
@@ -45,6 +46,14 @@ type PathKey struct {
 
 func (p PathKey) FullPath() string {
 	return path.Join(p.Pathname, p.Filename)
+}
+
+func (p PathKey) RootPath() string {
+	paths := strings.Split(p.Pathname, "/")
+	if len(paths) == 0 {
+		return ""
+	}
+	return paths[0]
 }
 
 type StoreOps struct {
@@ -86,19 +95,36 @@ func (s *Store) writeStream(key string, r io.Reader) error {
 		return err
 	}
 
-	pathAndFilename := pathKey.FullPath()
+	fullPath := pathKey.FullPath()
 
-	f, err := os.Create(pathAndFilename)
+	f, err := os.Create(fullPath)
 	if err != nil {
 		return err
 	}
+	defer f.Close()
 
 	n, err := io.Copy(f, r)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("Wrote %d bytes: %s\n", n, pathAndFilename)
+	log.Printf("Wrote %d bytes: %s\n", n, fullPath)
 
 	return nil
+}
+
+func (s *Store) Has(key string) bool {
+	pathKey := s.PathTransformFunc(key)
+	_, err := os.Stat(pathKey.FullPath())
+	return err == nil
+}
+
+func (s *Store) Delete(key string) error {
+	pathKey := s.PathTransformFunc(key)
+
+	defer func() {
+		log.Printf("Deleted %s\n", pathKey.Filename)
+	}()
+
+	return os.Remove(pathKey.FullPath())
 }
