@@ -11,6 +11,8 @@ import (
 	"strings"
 )
 
+const DefaultRootName = "ggnetwork"
+
 type PathTransformFunc func(string) PathKey
 
 var DefaultPathTransformFunc = func(key string) PathKey {
@@ -58,6 +60,8 @@ func (p PathKey) RootPath() string {
 
 type StoreOps struct {
 	PathTransformFunc
+	// Root is the folder name of the root.
+	Root string
 }
 
 type Store struct {
@@ -65,6 +69,14 @@ type Store struct {
 }
 
 func NewStore(opts StoreOps) *Store {
+	if opts.PathTransformFunc == nil {
+		opts.PathTransformFunc = DefaultPathTransformFunc
+	}
+
+	if len(opts.Root) == 0 {
+		opts.Root = DefaultRootName
+	}
+
 	return &Store{
 		opts,
 	}
@@ -91,13 +103,13 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 func (s *Store) writeStream(key string, r io.Reader) error {
 	pathKey := s.PathTransformFunc(key)
 
-	if err := os.MkdirAll(pathKey.Pathname, os.ModePerm); err != nil {
+	if err := os.MkdirAll(s.Root+"/"+pathKey.Pathname, os.ModePerm); err != nil {
 		return err
 	}
 
 	fullPath := pathKey.FullPath()
 
-	f, err := os.Create(fullPath)
+	f, err := os.Create(path.Join(s.Root, fullPath))
 	if err != nil {
 		return err
 	}
